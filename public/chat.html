@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+  <title>Chat — ChatApp</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      font-family: 'Inter', sans-serif;
+      height: 100dvh; width: 100vw;
+      background: #0f0f1a; color: #fff;
+      overflow: hidden; display: flex; flex-direction: column;
+    }
+
+    /* HEADER */
+    .header {
+      padding: 12px 18px;
+      background: rgba(255,255,255,0.04);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(15px);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .logo-icon {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: linear-gradient(135deg, #6c63ff, #8b5cf6);
+      display: flex; align-items: center; justify-content: center; font-size: 18px;
+    }
+    .title-box { display: flex; flex-direction: column; }
+    .room-title { font-size: 16px; font-weight: 700; line-height: 1.2; }
+    .status-badge {
+      font-size: 11px; color: #4ade80; display: inline-flex; align-items: center; gap: 4px; margin-top: 2px;
+    }
+    .pulse-dot { width: 6px; height: 6px; background: #4ade80; border-radius: 50%; }
+
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .user-pill {
+      background: rgba(108,99,255,0.2); border: 1px solid rgba(108,99,255,0.3);
+      color: #c4b5fd; font-size: 12px; font-weight: 600;
+      padding: 6px 12px; border-radius: 20px;
+      max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .logout-btn {
+      background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3);
+      color: #fca5a5; font-size: 12px; font-weight: 600;
+      padding: 6px 12px; border-radius: 20px; cursor: pointer;
+    }
+
+    /* MESSAGES AREA */
+    .messages-container {
+      flex: 1; overflow-y: auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 10px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .message {
+      max-width: 82%; display: flex; flex-direction: column;
+      animation: fadeIn 0.2s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .message.own { align-self: flex-end; align-items: flex-end; }
+    .message.other { align-self: flex-start; align-items: flex-start; }
+
+    .sender-tag { font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.45); margin-bottom: 2px; padding: 0 4px; }
+    .bubble {
+      padding: 10px 14px; border-radius: 16px; font-size: 14px; line-height: 1.45; word-break: break-word;
+    }
+    .message.own .bubble {
+      background: linear-gradient(135deg, #6c63ff, #8b5cf6);
+      border-bottom-right-radius: 4px; color: #fff;
+    }
+    .message.other .bubble {
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.08);
+      border-bottom-left-radius: 4px; color: rgba(255,255,255,0.9);
+    }
+    .meta-row {
+      display: flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0 4px;
+      font-size: 10px; color: rgba(255,255,255,0.3);
+    }
+    
+    /* READ RECEIPTS (CHECKMARKS) */
+    .receipt-check { font-size: 12px; }
+    .receipt-check.sent { color: rgba(255,255,255,0.4); } /* single grey check */
+    .receipt-check.read { color: #38bdf8; font-weight: bold; } /* double blue checks */
+
+    /* INPUT SECTION */
+    .input-section {
+      padding: 10px 14px 14px 14px;
+      background: rgba(255,255,255,0.04);
+      border-top: 1px solid rgba(255,255,255,0.08);
+      flex-shrink: 0;
+    }
+    .counter-bar {
+      display: flex; justify-content: flex-end; font-size: 11px;
+      color: rgba(255,255,255,0.4); padding: 0 6px 4px 6px;
+    }
+    .counter-bar.limit-exceeded { color: #f87171; font-weight: 600; }
+
+    .input-wrapper {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 20px; padding: 6px 6px 6px 14px;
+    }
+    .input-wrapper:focus-within { border-color: #8b5cf6; }
+    #msgInput {
+      flex: 1; background: none; border: none; outline: none;
+      color: #fff; font-size: 14px; font-family: 'Inter', sans-serif;
+    }
+    #sendBtn {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: linear-gradient(135deg, #6c63ff, #8b5cf6);
+      border: none; color: #fff; display: flex; align-items: center; justify-content: center;
+      cursor: pointer; flex-shrink: 0;
+    }
+    #sendBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo-icon">💬</div>
+      <div class="title-box">
+        <span class="room-title">Global Room</span>
+        <span class="status-badge" id="onlineBadge">
+          <span class="pulse-dot"></span> <span id="onlineText">1 Online</span>
+        </span>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="user-pill" id="myUsername">User</span>
+      <button class="logout-btn" id="logoutBtn">Exit</button>
+    </div>
+  </div>
+
+  <!-- CHAT MESSAGES -->
+  <div class="messages-container" id="messagesBox"></div>
+
+  <!-- INPUT AREA (WITH LIVE PAYLOAD/WORD COUNTER) -->
+  <div class="input-section">
+    <div class="counter-bar" id="counterBar">0 / 300 chars</div>
+    <div class="input-wrapper">
+      <input type="text" id="msgInput" placeholder="Type a message..." maxlength="350" autocomplete="off" />
+      <button id="sendBtn" title="Send Message">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const token = localStorage.getItem('token');
+    const myId = localStorage.getItem('userId');
+    const myName = localStorage.getItem('username');
+
+    if (!token) window.location.href = 'login.html';
+    document.getElementById('myUsername').textContent = myName || 'User';
+
+    const socket = io();
+
+    const messagesBox = document.getElementById('messagesBox');
+    const msgInput = document.getElementById('msgInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const counterBar = document.getElementById('counterBar');
+    const onlineText = document.getElementById('onlineText');
+
+    // 1. LIVE WORD & CHARACTER COUNTER (RESTRICTION FEATURE)
+    msgInput.addEventListener('input', () => {
+      const length = msgInput.value.length;
+      counterBar.textContent = `${length} / 300 chars`;
+
+      if (length > 300) {
+        counterBar.classList.add('limit-exceeded');
+        counterBar.textContent = `${length} / 300 (Limit Exceeded!)`;
+        sendBtn.disabled = true;
+      } else {
+        counterBar.classList.remove('limit-exceeded');
+        sendBtn.disabled = false;
+      }
+    });
+
+    // 2. RENDER MESSAGE WITH READ RECEIPTS
+    function renderMessage(msg) {
+      const isOwn = msg.sender?._id === myId || msg.sender === myId;
+      const senderName = msg.sender?.username || 'Unknown';
+      const timeStr = new Date(msg.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      // Determine read receipt status:
+      // If someone other than the sender has their ID in readBy, it is read!
+      const isRead = msg.readBy && msg.readBy.some(id => id !== myId);
+      const receiptHtml = isOwn 
+        ? `<span class="receipt-check ${isRead ? 'read' : 'sent'}" id="receipt-${msg._id}">${isRead ? '✓✓' : '✓'}</span>` 
+        : '';
+
+      const div = document.createElement('div');
+      div.className = `message ${isOwn ? 'own' : 'other'}`;
+      div.id = `msg-${msg._id}`;
+      div.innerHTML = `
+        ${!isOwn ? `<div class="sender-tag">${senderName}</div>` : ''}
+        <div class="bubble">${msg.text}</div>
+        <div class="meta-row">
+          <span>${timeStr}</span>
+          ${receiptHtml}
+        </div>
+      `;
+      messagesBox.appendChild(div);
+      messagesBox.scrollTop = messagesBox.scrollHeight;
+
+      // If received a message from someone else, mark it as read immediately!
+      if (!isOwn && msg._id) {
+        socket.emit('markAsRead', { messageIds: [msg._id], userId: myId });
+      }
+    }
+
+    // 3. SOCKET LISTENERS
+    socket.on('updateUserCount', (count) => {
+      onlineText.textContent = `${count} Online`;
+    });
+
+    socket.on('loadMessages', (messages) => {
+      messagesBox.innerHTML = '';
+      const unreadIds = [];
+
+      messages.forEach(msg => {
+        renderMessage(msg);
+        const isOwn = msg.sender?._id === myId || msg.sender === myId;
+        if (!isOwn && msg._id) unreadIds.push(msg._id);
+      });
+
+      // Mark all past unread messages as read
+      if (unreadIds.length > 0) {
+        socket.emit('markAsRead', { messageIds: unreadIds, userId: myId });
+      }
+    });
+
+    socket.on('receiveMessage', (msg) => {
+      renderMessage(msg);
+    });
+
+    // 4. LISTEN FOR REAL-TIME READ RECEIPT UPDATES (TURNS ✓ INTO BLUE ✓✓)
+    socket.on('messagesRead', ({ messageIds }) => {
+      messageIds.forEach(id => {
+        const checkEl = document.getElementById(`receipt-${id}`);
+        if (checkEl) {
+          checkEl.textContent = '✓✓';
+          checkEl.className = 'receipt-check read';
+        }
+      });
+    });
+
+    // 5. SEND MESSAGE LOGIC
+    function sendMessage() {
+      const text = msgInput.value.trim();
+      if (!text || text.length > 300) return;
+
+      socket.emit('sendMessage', { text, senderId: myId });
+      msgInput.value = '';
+      counterBar.textContent = '0 / 300 chars';
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    msgInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    // 6. LOGOUT
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      localStorage.clear();
+      window.location.href = 'login.html';
+    });
+  </script>
+</body>
+</html>
