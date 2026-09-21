@@ -21,6 +21,9 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 app.use('/auth', authRoutes);
+app.get('/', (req: Request, res: Response) => {
+    res.redirect('/login.html');
+})
 
 let onlineUsers = 0;
 
