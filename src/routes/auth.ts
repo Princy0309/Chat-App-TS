@@ -37,4 +37,48 @@ router.post('/register', async(req: Request, res: Response,): Promise<void> => {
     }
 });
 
+router.post('/login', async (req: Request, res: Response): Promise<void> =>{
+    try {
+        const {email, password} = req.body;
+
+        if (!email || !password) {
+            res.status(400).json({message: 'Email and password are required'});
+            return;
+        }
+
+        const user = await User.findOne({email});
+        if (!user) {
+            res.status(400).json({message: 'Invalid email or password'});
+            return;
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch){
+            res.status(400).json({ message: 'Invalid email or password' });
+            return;
+        }
+
+        const token = jwt.sign(
+            {userId: user._id, username: user.username },
+            process.env.JWT_SECRET as string,
+            { expiresIn: '24h'}
+        );
+
+        res.status(200).json({
+            message: 'Login successful',
+            token,
+            user:{
+        
+                id: user._id,
+                username: user.username,
+                email: user.email
+            }
+        });
+    } catch (err){
+        const errorMessage =err instanceof Error ? err.message : 'server error';
+        res.status(500).json({message: 'server error', error: errorMessage});
+    }
+});
+
+
 export default router;
