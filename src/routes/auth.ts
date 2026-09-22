@@ -21,6 +21,13 @@ router.post('/register', async(req: Request, res: Response,): Promise<void> => {
             return;
         }
 
+        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)\S{8,10}$/;
+        if(!passwordRegex.test(password)){
+            res.status(400).json({message: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number'});
+            return;
+        }
+
+
         const hashedPswd = await bcrypt.hash(password, 10);
 
         const newUser = new User({
