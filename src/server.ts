@@ -1,89 +1,103 @@
-import express, { Application, Request, Response } from 'express';
+import express, {Application, Request, Response} from 'express';
 import http from 'http';
-import { Server, Socket } from 'socket.io';
+import { WebSocketServer, WebSocket } from 'ws';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import authRoutes from './routes/auth';
 import Message from './models/message';
+import message from './models/message';
 
 dotenv.config();
 
-const app : Application = express();
+const app: Application = express();
 const httpServer: http.Server = http.createServer(app);
 
-const io : Server = new Server(httpServer, {
-    cors: {origin: "*"}
-});
+const wss = new WebSocketServer({server: httpServer});
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 app.use('/auth', authRoutes);
-app.get('/', (req: Request, res: Response) => {
+app.get('/', (req: Request, res: Response)=>{
     res.redirect('/login.html');
 })
 
-let onlineUsers = 0;
+function broadcast(data: object){
+    const payload = JSON.stringify(data);
+    wss.clients.forEach((client: WebSocket) => {
+        if(client.readyState === WebSocket.OPEN){
+            client.send(payload)
+        }
+    });
+}
 
-io.on('connection', async (socket: Socket)=>{
-    onlineUsers++;
-    io.emit('updateUserCount', onlineUsers);
-    console.log('user connected', socket.id, '| online:', onlineUsers);
+wss.on('connection', async (ws: WebSocket) => {
+    console.log('client connected. Total online : ', wss.clients.size);
+
+    broadcast({type: 'USER_COUNT', count: wss.clients.size});
 
     try{
-        const message = await Message.find()
+        const messages = await Message.find()
         .populate('sender', 'username')
         .sort({createdAt: 1});
-        socket.emit('loadMessages', message);
+        ws.send(JSON.stringify({type: 'CHAT_HISTORY', messages}));
     }catch(err){
-        console.error('Error fetching chat history', err);
+        console.error('Error fetching chat history: ', err);
     }
-    socket.on('sendMessage', async (data: { text: string; senderId: string }) => {
-        try {
-            const { text, senderId } = data;
 
-            if (!text || text.trim().length === 0) return;
-            if (text.length > 300) {
-                socket.emit('errorMessage', 'Message exceeds limit of 300 characters!');
-                return;
+        ws.on('message', async (rawData: string) => {
+        try {
+            const data = JSON.parse(rawData);
+
+            if (data.type === 'SEND_MESSAGE'){
+                const { text, senderId } = data;
+
+                if (!text || text.trim().length === 0) return;
+                if (text.length > 300) {
+                    ws.send(JSON.stringify({
+                        type: 'ERROR',
+                        message: 'Message exceeds limit of 300 characters!'
+                    }));
+                    return;
+                }
+
+                const newMessage = new Message({
+                    sender: senderId,
+                    text: text.trim(),
+                    readBy: [senderId]
+                });
+                await newMessage.save();
+
+                const populated = await Message.findById(newMessage._id).populate('sender', 'username');
+
+                broadcast({ type: 'NEW_MESSAGE', message: populated });
             }
 
-            const newMessage = new Message({
-                sender: senderId,
-                text: text.trim(),
-                readBy: [senderId]
-            });
-            await newMessage.save();
+            if (data.type === 'MARK_AS_READ') {
+                const { messageIds, userId } = data;
 
-            const populated = await Message.findById(newMessage._id).populate('sender', 'username');
+                await Message.updateMany(
+                    { _id: { $in: messageIds } },
+                    { $addToSet: { readBy: userId } }
+                );
 
-            io.emit('receiveMessage', populated);
+                broadcast({
+                    type: 'MESSAGES_READ',
+                    messageIds,
+                    readBy: userId
+                });
+            }
         } catch (err) {
-            console.error('Error saving message:', err);
+            console.error('WebSocket message error:', err);
         }
     });
 
-    socket.on('markAsRead', async (data: { messageIds: string[]; userId: string }) => {
-        try {
-            const {messageIds, userId} = data;
 
-            await Message.updateMany(
-                { _id: { $in: messageIds } },
-                { $addToSet: { readBy: userId } }
-            );
-
-            io.emit('messagesRead', { messageIds, readBy: userId });
-        } catch (err){
-            console.error('Error updating read receipts:', err);
-        }
-    });
-
-    socket.on('disconnect', () => {
-        onlineUsers = Math.max(0, onlineUsers - 1);
-        io.emit('updateUserCount', onlineUsers);
-        console.log('User disconnected:', socket.id, '| Online:', onlineUsers);
+        ws.on('close', () => {
+        console.log('Client disconnected. Total online:', wss.clients.size);
+        broadcast({ type: 'USER_COUNT', count: wss.clients.size });
     });
 });
 
@@ -99,4 +113,6 @@ mongoose.connect(process.env.MONGO_URI as string)
     .catch((err) => {
         console.error('MongoDB Atlas connection error:', err);
     });
+
+
 

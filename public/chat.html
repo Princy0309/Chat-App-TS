@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
   <title>Chat — ChatApp</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- NOTICE: NO SOCKET.IO SCRIPT! Pure Native WebSockets! -->
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -165,7 +165,10 @@
     if (!token) window.location.href = 'login.html';
     document.getElementById('myUsername').textContent = myName || 'User';
 
-    const socket = io();
+    // 1. CONNECT USING BROWSER'S NATIVE WEBSOCKET (No external script!)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}`;
+    const ws = new WebSocket(wsUrl);
 
     const messagesBox = document.getElementById('messagesBox');
     const msgInput = document.getElementById('msgInput');
@@ -173,7 +176,7 @@
     const counterBar = document.getElementById('counterBar');
     const onlineText = document.getElementById('onlineText');
 
-    // 1. LIVE WORD & CHARACTER COUNTER (RESTRICTION FEATURE)
+    // 2. LIVE WORD & CHARACTER COUNTER (RESTRICTION FEATURE)
     msgInput.addEventListener('input', () => {
       const length = msgInput.value.length;
       counterBar.textContent = `${length} / 300 chars`;
@@ -188,14 +191,13 @@
       }
     });
 
-    // 2. RENDER MESSAGE WITH READ RECEIPTS
+    // 3. RENDER MESSAGE WITH READ RECEIPTS
     function renderMessage(msg) {
       const isOwn = msg.sender?._id === myId || msg.sender === myId;
       const senderName = msg.sender?.username || 'Unknown';
       const timeStr = new Date(msg.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       // Determine read receipt status:
-      // If someone other than the sender has their ID in readBy, it is read!
       const isRead = msg.readBy && msg.readBy.some(id => id !== myId);
       const receiptHtml = isOwn 
         ? `<span class="receipt-check ${isRead ? 'read' : 'sent'}" id="receipt-${msg._id}">${isRead ? '✓✓' : '✓'}</span>` 
@@ -215,54 +217,74 @@
       messagesBox.appendChild(div);
       messagesBox.scrollTop = messagesBox.scrollHeight;
 
-      // If received a message from someone else, mark it as read immediately!
-      if (!isOwn && msg._id) {
-        socket.emit('markAsRead', { messageIds: [msg._id], userId: myId });
+      // If received message from someone else, notify server to mark as read!
+      if (!isOwn && msg._id && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'MARK_AS_READ',
+          messageIds: [msg._id],
+          userId: myId
+        }));
       }
     }
 
-    // 3. SOCKET LISTENERS
-    socket.on('updateUserCount', (count) => {
-      onlineText.textContent = `${count} Online`;
-    });
+    // 4. NATIVE WEBSOCKET MESSAGE DISPATCHER
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
 
-    socket.on('loadMessages', (messages) => {
-      messagesBox.innerHTML = '';
-      const unreadIds = [];
-
-      messages.forEach(msg => {
-        renderMessage(msg);
-        const isOwn = msg.sender?._id === myId || msg.sender === myId;
-        if (!isOwn && msg._id) unreadIds.push(msg._id);
-      });
-
-      // Mark all past unread messages as read
-      if (unreadIds.length > 0) {
-        socket.emit('markAsRead', { messageIds: unreadIds, userId: myId });
+      if (data.type === 'USER_COUNT') {
+        onlineText.textContent = `${data.count} Online`;
       }
-    });
 
-    socket.on('receiveMessage', (msg) => {
-      renderMessage(msg);
-    });
+      if (data.type === 'CHAT_HISTORY') {
+        messagesBox.innerHTML = '';
+        const unreadIds = [];
 
-    // 4. LISTEN FOR REAL-TIME READ RECEIPT UPDATES (TURNS ✓ INTO BLUE ✓✓)
-    socket.on('messagesRead', ({ messageIds }) => {
-      messageIds.forEach(id => {
-        const checkEl = document.getElementById(`receipt-${id}`);
-        if (checkEl) {
-          checkEl.textContent = '✓✓';
-          checkEl.className = 'receipt-check read';
+        data.messages.forEach(msg => {
+          renderMessage(msg);
+          const isOwn = msg.sender?._id === myId || msg.sender === myId;
+          if (!isOwn && msg._id) unreadIds.push(msg._id);
+        });
+
+        // Mark all unread past messages as read
+        if (unreadIds.length > 0 && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'MARK_AS_READ',
+            messageIds: unreadIds,
+            userId: myId
+          }));
         }
-      });
-    });
+      }
 
-    // 5. SEND MESSAGE LOGIC
+      if (data.type === 'NEW_MESSAGE') {
+        renderMessage(data.message);
+      }
+
+      if (data.type === 'MESSAGES_READ') {
+        data.messageIds.forEach(id => {
+          const checkEl = document.getElementById(`receipt-${id}`);
+          if (checkEl) {
+            checkEl.textContent = '✓✓';
+            checkEl.className = 'receipt-check read';
+          }
+        });
+      }
+
+      if (data.type === 'ERROR') {
+        alert(data.message);
+      }
+    };
+
+    // 5. SEND MESSAGE OVER NATIVE WEBSOCKET
     function sendMessage() {
       const text = msgInput.value.trim();
       if (!text || text.length > 300) return;
 
-      socket.emit('sendMessage', { text, senderId: myId });
+      ws.send(JSON.stringify({
+        type: 'SEND_MESSAGE',
+        text,
+        senderId: myId
+      }));
+
       msgInput.value = '';
       counterBar.textContent = '0 / 300 chars';
     }
